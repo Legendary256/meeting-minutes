@@ -109,12 +109,18 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 2. Right-click the downloaded file → **Properties** → Check **Unblock** → Click **OK**
 3. Run the installer (if Windows shows a security warning: Click **More info** → **Run anyway**)
 
-### 🍎 **macOS**
+### 🍎 **macOS** (DMG Installation)
 
 1. Download `meetily_0.2.0_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
 2. Open the downloaded `.dmg` file
 3. Drag **Meetily** to your Applications folder
-4. Open **Meetily** from Applications folder
+4. **First launch (important)**:
+   - Right-click on Meetily in Applications → **Open**
+   - If you see "Meetily can't be opened because Apple cannot check it for malicious software", click **Open** anyway
+   - Grant microphone permissions when prompted
+5. Open **Meetily** from Applications folder or Spotlight
+
+> **Note**: macOS may require you to allow the app in **System Preferences → Security & Privacy → General** on first launch.
 
 ### 🐧 **Linux**
 
@@ -130,6 +136,165 @@ git clone https://github.com/Zackriya-Solutions/meeting-minutes
 cd meeting-minutes/frontend
 pnpm install
 ./build-gpu.sh
+```
+
+---
+
+## Running from Source (Development)
+
+### Prerequisites
+
+**macOS:**
+```bash
+# Install Xcode CLI tools
+xcode-select --install
+
+# Install dependencies via Homebrew
+brew install rust node pnpm python@3.11 ffmpeg
+```
+
+**Windows:**
+- Install [Rust](https://rustup.rs/)
+- Install [Node.js](https://nodejs.org/) (LTS version)
+- Install [pnpm](https://pnpm.io/): `npm install -g pnpm`
+- Install [Python 3.11](https://www.python.org/downloads/)
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update
+sudo apt install -y build-essential curl git python3.11 python3.11-venv ffmpeg
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt install -y nodejs
+npm install -g pnpm
+```
+
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/Zackriya-Solutions/meeting-minutes.git
+cd meeting-minutes
+```
+
+### Step 2: Configure Environment
+
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env and add your API keys
+# Required for AI summaries: at least one of ANTHROPIC_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY
+```
+
+### Step 3: Setup Backend (Python)
+
+```bash
+cd backend
+
+# Create virtual environment
+python3.11 -m venv venv
+
+# Activate virtual environment
+# macOS/Linux:
+source venv/bin/activate
+# Windows:
+.\venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Return to root
+cd ..
+```
+
+### Step 4: Setup Frontend (Node.js/Tauri)
+
+```bash
+cd frontend
+
+# Install Node.js dependencies
+pnpm install
+```
+
+### Step 5: Run the Application
+
+**Option A: Development Mode (with hot reload)**
+
+```bash
+# Terminal 1: Start the backend (from backend/ directory)
+cd backend
+source venv/bin/activate  # or .\venv\Scripts\activate on Windows
+python -m uvicorn app.main:app --host 0.0.0.0 --port 5167 --reload
+
+# Terminal 2: Start the frontend (from frontend/ directory)
+cd frontend
+pnpm run tauri:dev
+```
+
+**Option B: Build and Run Production Version**
+
+```bash
+cd frontend
+
+# Build for your platform
+# macOS:
+./build-gpu.sh  # or pnpm run tauri:build
+
+# Windows:
+pnpm run tauri:build
+
+# The built app will be in frontend/src-tauri/target/release/bundle/
+```
+
+### Running with Local Transcription (Whisper)
+
+Meetily supports local transcription using Whisper. To set it up:
+
+```bash
+cd backend
+
+# Download Whisper model (e.g., medium model)
+./download-ggml-model.sh medium
+
+# Start Whisper server (in a separate terminal)
+./start_whisper_server.sh
+```
+
+### Running with ElevenLabs (Cloud Transcription)
+
+For higher accuracy transcription with speaker diarization:
+
+1. Get an API key from [ElevenLabs](https://elevenlabs.io/)
+2. Add to your `.env`:
+   ```
+   ELEVENLABS_API_KEY=your_api_key_here
+   ELEVENLABS_MODEL=scribe_v2
+   ```
+
+### Running with Meeting Agent AI
+
+The Meeting Agent provides real-time meeting assistance:
+
+1. Ensure you have an Anthropic API key in `.env`:
+   ```
+   ANTHROPIC_API_KEY=your_api_key_here
+   ```
+2. The agent will be available through the app's interface
+
+---
+
+## Quick Start Checklist
+
+```
+□ 1. Clone repository
+□ 2. Copy .env.example to .env
+□ 3. Add at least one LLM API key (Anthropic, Groq, or OpenAI)
+□ 4. Setup Python backend (venv + pip install)
+□ 5. Setup Frontend (pnpm install)
+□ 6. Start backend server
+□ 7. Start frontend (dev mode or build)
+□ 8. (Optional) Configure ElevenLabs for cloud transcription
+□ 9. (Optional) Download Whisper model for local transcription
 ```
 
 ## Key Features in Action

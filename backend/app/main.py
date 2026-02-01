@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
-from typing import Optional, List
+from typing import Optional, List, Dict
 import logging
+import os
 from dotenv import load_dotenv
 from db import DatabaseManager
 import json
@@ -639,6 +640,308 @@ async def shutdown_event():
         logger.info("Successfully cleaned up resources")
     except Exception as e:
         logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
+
+
+# ============== ELEVENLABS ENDPOINTS ==============
+
+class ElevenLabsTranscribeRequest(BaseModel):
+    audio_path: str
+    language: Optional[str] = None
+    num_speakers: Optional[int] = None
+    custom_vocabulary: Optional[List[str]] = None
+    meeting_id: Optional[str] = None
+
+
+@app.post("/api/elevenlabs/transcribe")
+async def transcribe_with_elevenlabs(request: ElevenLabsTranscribeRequest):
+    """Transcribe audio using ElevenLabs Scribe v2."""
+    try:
+        from elevenlabs.transcriber import get_transcriber
+        
+        transcriber = get_transcriber()
+        result = await transcriber.transcribe_file(
+            audio_path=request.audio_path,
+            language=request.language,
+            num_speakers=request.num_speakers,
+            custom_vocabulary=request.custom_vocabulary
+        )
+        
+        # Log cost to history
+        transcriber.cost_calculator.log_transcription(
+            duration_seconds=result.duration_seconds,
+            cost_usd=result.cost_usd,
+            meeting_id=request.meeting_id
+        )
+        
+        return result.model_dump()
+        
+    except ImportError:
+        raise HTTPException(
+            status_code=501, 
+            detail="ElevenLabs module not available. Install with: pip install elevenlabs"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"ElevenLabs transcription failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/elevenlabs/costs")
+async def get_elevenlabs_costs():
+    """Get ElevenLabs cost statistics."""
+    try:
+        from elevenlabs.transcriber import get_transcriber
+        
+        transcriber = get_transcriber()
+        session_stats = transcriber.get_session_stats()
+        monthly = transcriber.cost_calculator.get_current_month_summary()
+        
+        return {
+            "total_cost_usd": session_stats["total_cost"],
+            "total_duration_seconds": session_stats["total_duration_seconds"],
+            "total_duration_formatted": session_stats["total_duration_formatted"],
+            "transcription_count": session_stats["transcriptions_count"],
+            "current_month_cost": monthly.total_cost_usd,
+            "current_month_hours": monthly.total_duration_hours
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="ElevenLabs module not available"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/elevenlabs/languages")
+async def get_supported_languages():
+    """Get list of supported languages."""
+    try:
+        from elevenlabs.models import SUPPORTED_LANGUAGES
+        return [lang.model_dump() for lang in SUPPORTED_LANGUAGES]
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="ElevenLabs module not available"
+        )
+
+
+@app.post("/api/elevenlabs/estimate-cost")
+async def estimate_transcription_cost(duration_seconds: float):
+    """Estimate transcription cost before execution."""
+    try:
+        from elevenlabs.transcriber import get_transcriber, ElevenLabsTranscriber
+        
+        transcriber = get_transcriber()
+        cost = transcriber.cost_calculator.calculate(duration_seconds)
+        return {
+            "duration_seconds": duration_seconds,
+            "duration_formatted": ElevenLabsTranscriber._format_duration(duration_seconds),
+            "estimated_cost_usd": cost,
+            "price_per_hour": transcriber.cost_calculator.price_per_hour
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="ElevenLabs module not available"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/elevenlabs/plan-recommendation")
+async def get_plan_recommendation(monthly_hours: float):
+    """Get plan recommendation based on usage."""
+    try:
+        from elevenlabs.transcriber import get_transcriber
+        
+        transcriber = get_transcriber()
+        return transcriber.cost_calculator.get_plan_recommendation(monthly_hours)
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="ElevenLabs module not available"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== MEETING AGENT ENDPOINTS ==============
+
+class StartMeetingAgentRequest(BaseModel):
+    meeting_id: str
+    agenda: str
+    goals: Optional[List[str]] = None
+    context: Optional[str] = None
+
+
+class TranscriptChunkRequest(BaseModel):
+    meeting_id: str
+    text: str
+
+
+# Global agent storage
+_active_agents: Dict[str, object] = {}
+
+
+@app.post("/api/agent/start")
+async def start_meeting_agent(request: StartMeetingAgentRequest):
+    """Start agent for new meeting."""
+    try:
+        from agent.meeting_agent import MeetingAgent, register_agent
+        
+        agent = MeetingAgent()
+        
+        state = await agent.start_meeting(
+            meeting_id=request.meeting_id,
+            agenda=request.agenda,
+            goals=request.goals,
+            context=request.context
+        )
+        
+        register_agent(request.meeting_id, agent)
+        
+        return {
+            "status": "started",
+            "meeting_id": request.meeting_id,
+            "todos": [
+                {
+                    "id": t.id,
+                    "topic": t.topic,
+                    "description": t.description,
+                    "priority": t.priority,
+                    "status": t.status.value
+                }
+                for t in state.todos
+            ]
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+<<<<<<< Current (Your changes)
+            detail="Meeting Agent module not available. Ensure anthropic is installed."
+=======
+            detail="Meeting Agent module not available. Ensure google-generativeai is installed."
+>>>>>>> Incoming (Background Agent changes)
+        )
+    except Exception as e:
+        logger.error(f"Failed to start meeting agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/transcript")
+async def add_transcript_to_agent(request: TranscriptChunkRequest):
+    """Add transcript fragment for analysis."""
+    try:
+        from agent.meeting_agent import get_active_agent
+        
+        agent = get_active_agent(request.meeting_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Meeting agent not found")
+        
+        await agent.add_transcript_chunk(request.text)
+        return {"status": "received"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/analyze/{meeting_id}")
+async def force_agent_analysis(meeting_id: str):
+    """Force immediate analysis."""
+    try:
+        from agent.meeting_agent import get_active_agent
+        
+        agent = get_active_agent(meeting_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Meeting agent not found")
+        
+        analysis = await agent.analyze_now()
+        state = agent.get_state()
+        
+        return {
+            "analysis": analysis,
+            "todos": [
+                {
+                    "id": t.id,
+                    "topic": t.topic,
+                    "status": t.status.value,
+                    "key_points": t.key_points
+                }
+                for t in state.todos
+            ],
+            "suggestions": [
+                {"type": s.type, "content": s.content, "priority": s.priority}
+                for s in agent.get_recent_suggestions(5)
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent/state/{meeting_id}")
+async def get_agent_state(meeting_id: str):
+    """Get current agent state."""
+    try:
+        from agent.meeting_agent import get_active_agent
+        
+        agent = get_active_agent(meeting_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Meeting agent not found")
+        
+        state = agent.get_state()
+        
+        return {
+            "meeting_id": state.meeting_id,
+            "is_active": state.is_active,
+            "todos": [
+                {
+                    "id": t.id,
+                    "topic": t.topic,
+                    "description": t.description,
+                    "status": t.status.value,
+                    "priority": t.priority,
+                    "key_points": t.key_points
+                }
+                for t in state.todos
+            ],
+            "pending_count": len(agent.get_pending_todos()),
+            "suggestions": [
+                {"type": s.type, "content": s.content, "priority": s.priority}
+                for s in agent.get_recent_suggestions(10)
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/end/{meeting_id}")
+async def end_meeting_agent(meeting_id: str):
+    """End meeting and get summary."""
+    try:
+        from agent.meeting_agent import get_active_agent, unregister_agent
+        
+        agent = get_active_agent(meeting_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Meeting agent not found")
+        
+        summary = await agent.end_meeting()
+        
+        # Cleanup
+        unregister_agent(meeting_id)
+        
+        return summary
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import multiprocessing
